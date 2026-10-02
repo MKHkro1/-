@@ -410,21 +410,137 @@ namespace MengxiLib.BepInEx.Patch
             }
         }
 
-        [HarmonyPatch(nameof(CreatePlant.MixBombCheck))]
-        [HarmonyPrefix]
-        public static bool Prefix_MixBombCheck(CreatePlant __instance, ref int theBoxColumn, ref int theBoxRow, ref bool __result)
+        /// <summary>
+        /// 炸弹融合判定 —— <b>4.0.5 路径</b>（挂在 <c>CreatePlant.MixBombCheck</c> 这一环上）。
+        /// <para>
+        /// 4.0.5-fix 起 <c>CreatePlant</c> 把 10 个私有判定（PotCheck / CheckFlying / CheckPuff /
+        /// PumpkinCheck / PresentCheck / MixBombCheck / HasDoubleBoxPlant / DoubleBoxCheck /
+        /// CheckDoubleBoxGrid / HasWaterPumpkinSupport）整体并入了新的 <c>PlaceRule</c> 规则系统，
+        /// <c>MixBombCheck</c> 已从 interop 消失。
+        /// </para>
+        /// <para>
+        /// 因此这里的目标必须写成<b>字符串方法名</b>（<c>nameof(CreatePlant.MixBombCheck)</c> 在 fix 版 CS0117），
+        /// 并配 <see cref="HarmonyPrepareAttribute"/> 守卫：fix 版上目标解析不到时
+        /// 由 Harmony 整体跳过本类，不留 <c>Failed to patch</c> 噪音。
+        /// fix 版的等价实现见 <see cref="MixBombRulePatch"/>。
+        /// </para>
+        /// </summary>
+        [HarmonyPatch(typeof(CreatePlant), "MixBombCheck")]
+        internal static class MixBombCheckPatch
         {
-            List<Plant> plants = Lawnf.Get1x1Plants(theBoxColumn, theBoxRow).ToArray().ToList();
-            foreach (var plant in plants)
+            [HarmonyPrepare]
+            private static bool Prepare()
+                => AccessTools.Method(typeof(CreatePlant), "MixBombCheck",
+                       new Type[] { typeof(int), typeof(int) }) != null;
+
+            [HarmonyPrefix]
+            public static bool Prefix(ref int theBoxColumn, ref int theBoxRow, ref bool __result)
             {
-                if (plant == null) continue;
-                if (CustomCore.CustomMixBombFusions.Any(kvp => kvp.Key.Item2 == plant.thePlantType))
+                List<Plant> plants = Lawnf.Get1x1Plants(theBoxColumn, theBoxRow).ToArray().ToList();
+                foreach (var plant in plants)
                 {
-                    __result = true;
-                    return false;
+                    if (plant == null) continue;
+                    if (CustomCore.CustomMixBombFusions.Any(kvp => kvp.Key.Item2 == plant.thePlantType))
+                    {
+                        __result = true;
+                        return false;
+                    }
+                }
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// 炸弹融合判定 —— <b>4.0.5-fix 路径</b>（挂在规则系统里的那一环上）。
+        /// <para>
+        /// 与 <see cref="MixBombCheckPatch"/> <b>语义完全等价</b>：两者都是「让炸弹融合这一环通过」，
+        /// 而不是「无视其它判定直接放行整格」—— 后者会绕过 CheckBox 的规则 AND 链，属语义回归，切勿那么写。
+        /// </para>
+        /// <para>
+        /// 原生 <c>PlaceRule.MixBombRule.Check</c>（IDA 0x1807ED700）逐行为：
+        /// <c>if (board.boardTag.isRogue) return 1;</c> 然后遍历该格 <c>BoardGrid.PlantsByLayer</c> 的各层植物，
+        /// 只要有一株 <c>MixBomb.Recipe.ContainsKey(plant.thePlantType)</c> 就返回 true。本补丁不动它，
+        /// 只在它返回 false 时按二创注册的 <c>CustomMixBombFusions</c> 追加放行。
+        /// </para>
+        /// <para>
+        /// 目标用字符串类型名 + <see cref="HarmonyPrepareAttribute"/> 守卫，4.0.5 上整个类被跳过。
+        /// 坐标取自 <c>BoardGrid.theColumn / theRow</c>（该类型两版都有）。
+        /// </para>
+        /// </summary>
+        [HarmonyPatch("PlaceRule.MixBombRule", "Check")]
+        internal static class MixBombRulePatch
+        {
+            [HarmonyPrepare]
+            private static bool Prepare()
+                => AccessTools.TypeByName("PlaceRule.MixBombRule") != null;
+
+            [HarmonyPostfix]
+            public static void Postfix(BoardGrid grid, ref bool __result)
+            {
+                if (__result || grid == null || CustomCore.CustomMixBombFusions.Count == 0)
+                    return;
+
+                List<Plant> plants = Lawnf.Get1x1Plants(grid.theColumn, grid.theRow).ToArray().ToList();
+                foreach (var plant in plants)
+                {
+                    if (plant == null) continue;
+                    if (CustomCore.CustomMixBombFusions.Any(kvp => kvp.Key.Item2 == plant.thePlantType))
+                    {
+                        __result = true;
+                        return;
+                    }
                 }
             }
-            return true;
+        }
+
+        /// <summary>
+        /// ★ 二创植物的「放置层级」兜底 —— 本条是 4.0.5-fix 新规则系统的**必要适配**。
+        /// <para>
+        /// 4.0.5-fix 起 <c>CreatePlant.CheckBox</c> 改为遍历
+        /// <c>PlaceRule.PlaceManager.GetRules(plantType)</c> 的规则链，而 <c>GetRules → CreateRules</c>
+        /// 用 <c>TypeConfiguration.GetLayer(plantType)</c> 决定分支（该字典由原版资源表填充）：
+        /// <c>Fly</c> → emptyFlyRule（飞行植物专属）/ <c>Pot</c> → potTerrainRule+emptyPotRule /
+        /// <c>Pumpkin</c> → emptyPumpkinRule+pumpkinSpaceRule+waterPumpkinSupportRule /
+        /// 其余 → ordinaryTerrainRule + …（普通植物）。
+        /// </para>
+        /// <para>
+        /// 而 <c>TypeConfiguration.GetLayer</c>（IDA 0x180670C70）对**查不到的 key 一律返回
+        /// <c>Layer.Default</c>**（<c>if (!TryGetValue) return 0;</c>，不抛异常）。
+        /// ⇒ 二创植物的 ID 不在原版 <c>plantLayers</c> 里，**飞行 / 花盆 / 南瓜类二创植物会被当成普通植物**，
+        /// 走 <c>ordinaryTerrainRule</c> 等分支 —— 最典型的表现是飞行植物在空地上种不下去。
+        /// </para>
+        /// <para>
+        /// 这里只在原生返回 <c>Default</c> 时兜底（原版植物已有明确层级，一律不受影响），
+        /// 且判定直接复用 <c>TypeMgr.FlyingPlants / IsPot / IsPumpkin</c> —— 本库已为这三个入口做了
+        /// Prefix 兜底（含 <c>TypeMgrExtra</c> 与皮肤表），因此能拿到二创植物的真实分类。
+        /// </para>
+        /// </summary>
+        [HarmonyPatch(typeof(TypeConfiguration), nameof(TypeConfiguration.GetLayer))]
+        internal static class TypeConfigurationLayerPatch
+        {
+            [HarmonyPostfix]
+            public static void Postfix(ref PlantType type, ref PlaceRule.Layer __result)
+            {
+                // 原版植物（或已被别人指到明确层级）→ 不动
+                if (__result != PlaceRule.Layer.Default)
+                    return;
+
+                // ★ 只兜底「本库注册过的二创植物」，原版植物一律不碰
+                //（调用频率极低：CreateRules 每个 plantType 只跑一次并被 rulesByPlant 缓存）
+                if (!CustomCore.CustomPlantTypes.Contains(type))
+                    return;
+
+                try
+                {
+                    if (TypeMgr.FlyingPlants(type)) { __result = PlaceRule.Layer.Fly; return; }
+                    if (TypeMgr.IsPot(type)) { __result = PlaceRule.Layer.Pot; return; }
+                    if (TypeMgr.IsPumpkin(type)) { __result = PlaceRule.Layer.Pumpkin; return; }
+                }
+                catch (Exception ex)
+                {
+                    CustomCore.CLogger?.LogWarning("[放置层级兜底] TypeConfiguration.GetLayer 兜底失败：" + ex.Message);
+                }
+            }
         }
     }
 
