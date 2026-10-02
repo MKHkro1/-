@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("MengxiLib.BepInEx")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+77c736162dce62b9794e979429669d268f6602f0")]
 [assembly: System.Reflection.AssemblyProductAttribute("MengxiLib.BepInEx")]
 [assembly: System.Reflection.AssemblyTitleAttribute("MengxiLib.BepInEx")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

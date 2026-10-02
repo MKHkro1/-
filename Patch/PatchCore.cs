@@ -760,16 +760,83 @@ namespace MengxiLib.BepInEx.Patch
                 }
             }
         }
+    }
 
-        [HarmonyPatch(nameof(InitBoard.RightMoveCamera))]
+    /// <summary>
+    /// 自定义关卡（theBoardType == LevelType 66）的词条注入：把该关卡配置的
+    /// AdvBuffs / UltiBuffs / Debuffs 写进 TravelMgr.data。
+    ///
+    /// ★ 为什么挂点要按平台分流（跟进上游 CustomizeLib 的「修复选卡过场 UniTask 异常」）
+    ///   原实现挂在 <c>InitBoard.RightMoveCamera(float)</c>，而该方法的返回类型是
+    ///   <c>Cysharp.Threading.Tasks.UniTask</c> —— Harmony 生成的托管跳板必须把这个
+    ///   IL2CPP 返回值原样封送回 native 调用方。安卓的 CoreCLR 启动器做不到这一点，
+    ///   结果是进选卡过场时直接崩（上游为此把同一段逻辑改挂 <c>InitBoard.Awake</c>）。
+    ///   两个方法的原生地址都是**独占**的（RightMoveCamera VA 0x1809F5180、
+    ///   Awake VA 0x1809F1610，全反编译源码各只有 1 个成员引用，不是空方法体合并 thunk），
+    ///   所以按平台换挂点在结构上是安全的。
+    ///   PC 侧继续挂在 RightMoveCamera：**时序与改动前逐字一致**，不引入任何行为变化。
+    ///
+    /// ★ 安卓路径的额外兜底
+    ///   Awake 比 RightMoveCamera 早得多，那时 TravelMgr.data 很可能还没建好。
+    ///   所以安卓路径下若当帧拿不到 data，会启动一个**有上限（120 帧 ≈ 2 秒）**的协程重试，
+    ///   拿到即注入并退出；始终拿不到就打一条 LogWarning 说明原因（失败路径必须留痕）。
+    /// </summary>
+    [HarmonyPatch]
+    [HarmonyPriority(Priority.First)]
+    internal static class InitBoardCustomLevelBuffPatch
+    {
+        /// <summary>安卓改挂 Awake（UniTask 封送问题）；PC 保持 RightMoveCamera。静态只算一次，两处共用同一个真值。</summary>
+        private static readonly bool UseAwakeHook = Application.platform == RuntimePlatform.Android;
+
+        private static MethodBase TargetMethod()
+        {
+            if (UseAwakeHook)
+            {
+                var awake = AccessTools.Method(typeof(InitBoard), nameof(InitBoard.Awake));
+                if (awake != null)
+                    return awake;
+
+                CustomCore.CLogger.LogWarning(
+                    "[前置库] 安卓模式下未能解析 InitBoard.Awake，已回退到 RightMoveCamera —— 可能重现 UniTask 封送异常。");
+            }
+
+            return AccessTools.Method(typeof(InitBoard), nameof(InitBoard.RightMoveCamera));
+        }
+
         [HarmonyPostfix]
-        public static void PostRightMoveCamera()
+        private static void Postfix()
         {
             if (GameAPP.theBoardType is not (LevelType)66) return;
-            var levelData = CustomCore.CustomLevels[GameAPP.theBoardLevel];
-            var travelMgr = GameAPP.Instance.GetOrAddComponent<TravelMgr>();
+
+            if (ApplyCustomLevelBuffs()) return;
+
+            // 只有安卓（Awake 挂点）才可能在这里拿不到 data —— PC 的 RightMoveCamera 时机上 data 已就绪，
+            // 保持"拿不到就静默返回"的原行为，不给 PC 引入任何新的时序。
+            if (!UseAwakeHook) return;
+
+            var app = GameAPP.Instance;
+            if (app != null)
+                app.StartCoroutine(DeferredApplyCustomLevelBuffs());
+        }
+
+        /// <summary>注入本体。返回 true 表示"已完成或本来就没什么可做"，false 表示"数据还没就绪、可以稍后重试"。</summary>
+        private static bool ApplyCustomLevelBuffs()
+        {
+            // CustomCore.CustomLevels 是 List<CustomLevelData>、按关卡号取下标（原实现就是 CustomLevels[level]），
+            // 所以这里判的是下标越界而不是字典缺键。越界 = 该关卡没注册自定义数据 ⇒ 无词条可注入，按已完成处理。
+            var levels = CustomCore.CustomLevels;
+            var level = GameAPP.theBoardLevel;
+            if (levels == null || level < 0 || level >= levels.Count) return true;
+
+            var levelData = levels[level];
+
+            var app = GameAPP.Instance;
+            if (app == null) return false;
+
+            var travelMgr = app.GetOrAddComponent<TravelMgr>();
             var data = travelMgr?.data;
-            if (data == null) return;
+            if (data == null) return false;
+
             foreach (var a in levelData.AdvBuffs())
             {
                 if (a >= 0)
@@ -793,6 +860,22 @@ namespace MengxiLib.BepInEx.Patch
                     data.travelDebuffs.Add((TravelDebuff)d);
                 }
             }
+
+            return true;
+        }
+
+        /// <summary>安卓路径的兜底重试：最多 120 帧（≈2 秒），拿到 TravelMgr.data 立即注入并退出。</summary>
+        private static IEnumerator DeferredApplyCustomLevelBuffs()
+        {
+            for (var i = 0; i < 120; i++)
+            {
+                if (GameAPP.theBoardType is not (LevelType)66) yield break;
+                if (ApplyCustomLevelBuffs()) yield break;
+                yield return null;
+            }
+
+            CustomCore.CLogger.LogWarning(
+                "[前置库] 自定义关卡（LevelType 66）的词条注入未在 2 秒内完成，已放弃：TravelMgr.data 始终为空。");
         }
     }
 
