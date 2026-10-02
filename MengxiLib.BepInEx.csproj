@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- 显式声明程序集名与根命名空间，不依赖 csproj 文件名 / 文件夹名。
+         两者必须同为 MengxiLib.BepInEx：CustomCore.GetAssetBundle 先查
+         "<程序集简名>.<资源名>"，各模组 csproj 的 EmbeddedResource LogicalName 按此前缀写。 -->
+    <AssemblyName>MengxiLib.BepInEx</AssemblyName>
+    <RootNamespace>MengxiLib.BepInEx</RootNamespace>
+    <TargetFramework>net6.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateDocumentationFile>True</GenerateDocumentationFile>
+    <DocumentationFile>$(OutDir)MengxiLib.BepInEx.xml</DocumentationFile>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+    <NoWarn>$(NoWarn);MSB3277;$(NoWarn);1591</NoWarn>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+    <NoWarn>$(NoWarn);MSB3277;$(NoWarn);1591</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.0.1" />
+  </ItemGroup>
+</Project>

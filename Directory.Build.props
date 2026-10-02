@@ -1,0 +1,113 @@
+<Project>
+  <!--
+    前置库（MengxiLib.BepInEx）专用 Directory.Build.props
+
+    为什么需要本文件：
+      MSBuild 的「就近 Directory.Build.props」规则会**只导入最近的那一个**，不叠加。
+      本工程在 2026-09-27 从 `.CustomizeLib二创插件前置库及使用示例（4.0版本）\` 移到 `插件项目Code\前置库\` 之后，
+      原先那份提供引用集（F:\vsrepos\CustomizeLib\lib\BepInEx\libs\*.dll，作者机路径，本机不存在）不再生效，
+      继承到的是 `插件项目Code\Directory.Build.props`，它只提供 5 个引用
+      （Core / Assembly-CSharp / Unity.TextMeshPro / UnityEngine.UI / UnityEngine.CoreModule），
+      不足以编译本库 → 1051 个 CS0012。
+      故在此重建完整引用集。
+
+    ⚠ 刻意**不**创建 `前置库\Directory.Build.targets`：
+      那会把 `插件项目Code\Directory.Build.targets` 顶掉，
+      而统一构建产物落盘正是靠它里面的 CopyMainDllByMap（按 dll输出对应.txt 映射复制）。
+      只建 props、保留上级的 targets，是刻意的设计。
+
+    引用集来源（2026-10-01 改，对应游戏 4.0.5）：默认 = **游戏实例的 BepInEx\**，
+    即"运行时真正加载的那 132 个程序集"（interop 102 + core 30）：
+      core    : BepInEx.Core / Il2CppInterop.* / 0Harmony(HarmonyX 2.10.2) / MonoMod / SemanticVersioning …
+      interop : Assembly-CSharp（游戏本体）/ Il2Cppmscorlib / Il2CppSystem* / UnityEngine.*Module / UniTask …
+      dobby.dll 是原生库、没有托管元数据，必须排除（否则 MSB3202 / 引用解析失败）。
+      已实测：这 132 个与 ..\libs插件依赖\ 下的同名文件**逐个 MD5 一致**，所以与全仓 1000+ 个模组
+      csproj 编译时用的引用集是同一套（不构成"编 A 集、模组编 B 集"的错配）。
+
+    ⚠ 为什么**不能**直接 glob ..\libs插件依赖\*.dll（2026-10-01 实测踩过）：
+      那个目录是 354 个文件的杂物箱，除运行时程序集外还混着
+        ① **本库自己的产物** MengxiLib.BepInEx.dll → 每个类型都与自己冲突，314 条 CS0436；
+        ② 旧版单体 BepInEx 5.4.23.4（BepInEx.dll）→ 与 BepInEx.Core 6.0.0.0 同定义 ManualLogSource；
+        ③ 旧版上游 Harmony 2.0.0.0（0Harmony20.dll）→ 与 0Harmony 2.10.2.0 同定义 HarmonyPatch 等；
+        ④ MelonLoader.dll —— 声明了顶层 `Harmony` **命名空间**，让 `Harmony` 这个标识符不再能当类型用（CS0118）；
+        ⑤ 重复下载件 Il2CppInterop.Runtime(1).dll / Il2CppInterop.Common(1).dll；
+        ⑥ 十几个无托管元数据的原生 DLL（coreclr / clrjit / hostpolicy / msquic …）→ 一堆 MSB3246。
+      各模组 csproj 不受影响，是因为它们**按文件名写死 HintPath**，不会 glob 到这些。
+  -->
+  <PropertyGroup>
+    <!-- 编译期引用出处 = 全仓统一的 libs插件依赖\（4.0.5；已实测与游戏实例 BepInEx\interop|core
+         逐文件 MD5 一致）。游戏升版本时只要把新实例的 interop\*.dll 与 core\*.dll 更新进这个目录即可，
+         本文件不用改。 -->
+    <PVZLibsDir>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\libs插件依赖\'))</PVZLibsDir>
+    <!-- 诊断用：把本轮真正解析到的引用集打出来（排"引用遮蔽"问题时用；平时忽略）
+         dotnet msbuild MengxiLib.BepInEx.csproj -t:ResolveAssemblyReferences -getItem:ReferencePath -->
+  </PropertyGroup>
+
+  <!-- 引用集存在性守卫
+       为什么必须加：下面的 <Reference Include="…\*.dll" /> 是 **glob**，
+       路径写错 / 换机器 / 游戏升版本时，glob 匹配到 0 个文件也**不报错**，
+       引用被静默丢掉 → 最终表现为满屏 CS0012（本文件顶部记的那 1051 个），
+       而真正的病因（路径不存在）一个字都不会出现在日志里，排查成本极高。 -->
+  <Target Name="ValidateGameReferencePath" BeforeTargets="ResolveAssemblyReferences">
+    <Error Condition="!Exists('$(PVZLibsDir)Assembly-CSharp.dll')"
+           Text="前置库引用集缺失：找不到 '$(PVZLibsDir)Assembly-CSharp.dll'。游戏升版本后要把新实例 BepInEx\interop\*.dll 与 BepInEx\core\*.dll 更新进 libs插件依赖\，再编译。（没有这个守卫的话，glob 匹配不到文件会静默丢引用，最后只表现为上千个 CS0012。）" />
+    <Error Condition="!Exists('$(PVZLibsDir)BepInEx.Core.dll')"
+           Text="前置库引用集缺失：找不到 '$(PVZLibsDir)BepInEx.Core.dll'。同上。" />
+    <Error Condition="!Exists('$(PVZLibsDir)0Harmony.dll')"
+           Text="前置库引用集缺失：找不到 '$(PVZLibsDir)0Harmony.dll'（HarmonyX）。同上。" />
+  </Target>
+
+  <ItemDefinitionGroup>
+    <!-- 引用一律不复制到输出目录：这些程序集由游戏/BepInEx 提供 -->
+    <Reference>
+      <Private>false</Private>
+    </Reference>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <Compile Remove="相关参考**\**" />
+    <Compile Remove="相关参考代码\**" />
+    <Compile Remove="相关参考项目\**" />
+    <Compile Remove="相关反汇编**\**" />
+    <Compile Remove="相关反汇编代码\**" />
+    <Compile Remove="Microsoft\**" />
+    <Compile Remove="System\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      引用集 = ..\libs插件依赖\*.dll（扁平目录，游戏 interop 与 BepInEx core 已合并在里面）。
+      已实测：该目录 354 个文件里只有 132 个是"游戏运行时真正加载的"，其余是历史遗留、
+      重复下载件、无托管元数据的原生 DLL，以及**本库自己的产物**。glob 整个目录必须排除下面这些，
+      否则会出现（2026-10-01 实测）：
+        · 314 条 CS0436  —— 引用了 libs插件依赖\MengxiLib.BepInEx.dll（= 本库上一版产物），
+                            每个类型都与自己冲突。这条**永久存在**，因为前置库的映射目标之一就是该目录。
+                            （旧名 CustomizeLib.BepInEx.dll 同样要排除：它还留在该目录里，
+                              供别的作者的模组使用，也用于「两库共存」的实测；两者都不是本库该引用的。）
+        · CS0433 ×N     —— BepInEx.dll(5.4.23.4 旧单体) 与 BepInEx.Core(6.0.0.0) 同定义 ManualLogSource；
+                            0Harmony20.dll(2.0.0.0 旧 Harmony) 与 0Harmony(2.10.2.0 HarmonyX) 同定义 HarmonyPatch 等；
+        · CS0118        —— MelonLoader.dll 声明了顶层 `Harmony` **命名空间**，
+                            使 `Harmony` 这个标识符不再能当类型用（CustomCore.CoreData.Harmony 字段中招）；
+        · 一堆 MSB3246  —— coreclr / clrjit / hostpolicy / msquic 等原生 DLL「不含元数据」。
+
+      ★ 换游戏版本后如果又冒出 CS0433 / CS0436 / CS0118 指向某个新文件，就是 libs插件依赖 里
+        又多了一份历史遗留件 —— 用 .tools\asmdiff 的 Mono.Cecil 比对 AssemblyVersion 定位后加进下面的排除表。
+    -->
+    <Reference Include="$(PVZLibsDir)*.dll"
+               Exclude="$(PVZLibsDir)dobby.dll;
+                          $(PVZLibsDir)MengxiLib*.dll;
+                          $(PVZLibsDir)CustomizeLib*.dll;
+                          $(PVZLibsDir)BepInEx.dll;
+                          $(PVZLibsDir)BepInEx.Harmony.dll;
+                          $(PVZLibsDir)BepInEx.Preloader.dll;
+                          $(PVZLibsDir)0Harmony20.dll;
+                          $(PVZLibsDir)HarmonyXInterop.dll;
+                          $(PVZLibsDir)MelonLoader*.dll;
+                          $(PVZLibsDir)*Interop*(1).dll;
+                          $(PVZLibsDir)coreclr.dll;$(PVZLibsDir)clrjit.dll;$(PVZLibsDir)hostpolicy.dll;
+                          $(PVZLibsDir)mscordaccore*.dll;$(PVZLibsDir)mscordbi.dll;$(PVZLibsDir)mscorrc.dll;
+                          $(PVZLibsDir)msquic.dll;$(PVZLibsDir)dbgshim.dll;
+                          $(PVZLibsDir)Microsoft.DiaSymReader*.dll;$(PVZLibsDir)clretwrc.dll;
+                          $(PVZLibsDir)System.IO.Compression.Native.dll" />
+  </ItemGroup>
+</Project>

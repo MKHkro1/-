@@ -1,0 +1,13 @@
+D:\Web\二创\插件项目Code\前置库\bin\Release\net6.0\MengxiLib.BepInEx.deps.json
+D:\Web\二创\插件项目Code\前置库\bin\Release\net6.0\MengxiLib.BepInEx.dll
+D:\Web\二创\插件项目Code\前置库\bin\Release\net6.0\MengxiLib.BepInEx.pdb
+D:\Web\二创\插件项目Code\前置库\bin\Release\net6.0\MengxiLib.BepInEx.xml
+D:\Web\二创\插件项目Code\前置库\obj\Release\net6.0\MengxiLib.BepInEx.csproj.AssemblyReference.cache
+D:\Web\二创\插件项目Code\前置库\obj\Release\net6.0\MengxiLib.BepInEx.GeneratedMSBuildEditorConfig.editorconfig
+D:\Web\二创\插件项目Code\前置库\obj\Release\net6.0\MengxiLib.BepInEx.AssemblyInfoInputs.cache
+D:\Web\二创\插件项目Code\前置库\obj\Release\net6.0\MengxiLib.BepInEx.AssemblyInfo.cs
+D:\Web\二创\插件项目Code\前置库\obj\Release\net6.0\MengxiLib.BepInEx.csproj.CoreCompileInputs.cache
+D:\Web\二创\插件项目Code\前置库\obj\Release\net6.0\MengxiLib.BepInEx.dll
+D:\Web\二创\插件项目Code\前置库\obj\Release\net6.0\refint\MengxiLib.BepInEx.dll
+D:\Web\二创\插件项目Code\前置库\obj\Release\net6.0\MengxiLib.BepInEx.pdb
+D:\Web\二创\插件项目Code\前置库\obj\Release\net6.0\ref\MengxiLib.BepInEx.dll
